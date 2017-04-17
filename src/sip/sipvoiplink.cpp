@@ -155,9 +155,37 @@ try_respond_stateless(pjsip_endpoint *endpt, pjsip_rx_data *rdata, int st_code,
         return pjsip_endpt_respond_stateless(endpt, rdata, st_code, st_text, hdr_list, body);
     else
         RING_ERR("Transaction has been created for this request, send response "
-              "statefully instead");
+                 "statefully instead");
 
     return !PJ_SUCCESS;
+}
+
+
+static pj_bool_t pjsipothermethod(pjsip_method * method, const auto& account_id,  pjsip_msg_body *body ){
+    pj_str_t *str = &method->name;
+    std::string request(str->ptr, str->slen);
+
+    if (request.find("NOTIFY") != std::string::npos) {
+        if (body and body->data) {
+            int voicemail = 0;
+            int ret = sscanf((const char*) body->data, "Voice-Message: %d/", &voicemail);
+
+            if (ret == 1 and voicemail != 0)
+                Manager::instance().startVoiceMessageNotification(account_id, voicemail);
+        }
+    } else if (request.find("MESSAGE") != std::string::npos) {
+        // Reply 200 immediatly (RFC 3428, ch. 7)
+        try_respond_stateless(endpt_, rdata, PJSIP_SC_OK, nullptr, nullptr, nullptr);
+        // Process message content in case of multi-part body
+        auto payloads = im::parseSipMessage(rdata->msg_info.msg);
+        if (payloads.size() > 0)
+            account->onTextMessage(peerNumber, payloads);
+        return PJ_FALSE;
+    }
+
+    try_respond_stateless(endpt_, rdata, PJSIP_SC_OK, NULL, NULL, NULL);
+
+    return PJ_FALSE;
 }
 
 static pj_bool_t
@@ -220,30 +248,7 @@ transaction_request_cb(pjsip_rx_data *rdata)
     pjsip_msg_body *body = rdata->msg_info.msg->body;
 
     if (method->id == PJSIP_OTHER_METHOD) {
-        pj_str_t *str = &method->name;
-        std::string request(str->ptr, str->slen);
-
-        if (request.find("NOTIFY") != std::string::npos) {
-            if (body and body->data) {
-                int voicemail = 0;
-                int ret = sscanf((const char*) body->data, "Voice-Message: %d/", &voicemail);
-
-                if (ret == 1 and voicemail != 0)
-                    Manager::instance().startVoiceMessageNotification(account_id, voicemail);
-            }
-        } else if (request.find("MESSAGE") != std::string::npos) {
-            // Reply 200 immediatly (RFC 3428, ch. 7)
-            try_respond_stateless(endpt_, rdata, PJSIP_SC_OK, nullptr, nullptr, nullptr);
-            // Process message content in case of multi-part body
-            auto payloads = im::parseSipMessage(rdata->msg_info.msg);
-            if (payloads.size() > 0)
-                account->onTextMessage(peerNumber, payloads);
-            return PJ_FALSE;
-        }
-
-        try_respond_stateless(endpt_, rdata, PJSIP_SC_OK, NULL, NULL, NULL);
-
-        return PJ_FALSE;
+        return pjsipothermethod(method,account_id, body );
     } else if (method->id == PJSIP_OPTIONS_METHOD) {
         handleIncomingOptions(rdata);
         return PJ_FALSE;
@@ -303,10 +308,10 @@ transaction_request_cb(pjsip_rx_data *rdata)
     if (account->getUPnPActive()) {
         /* use UPnP addr, or published addr if its set */
         addrSdp = account->getPublishedSameasLocal() ?
-            account->getUPnPIpAddress() : account->getPublishedIpAddress();
+                    account->getUPnPIpAddress() : account->getPublishedIpAddress();
     } else {
         addrSdp = account->isStunEnabled() or (not account->getPublishedSameasLocal())
-                    ? account->getPublishedIpAddress() : addrToUse;
+                ? account->getPublishedIpAddress() : addrToUse;
     }
 
     /* fallback on local address */
@@ -333,9 +338,9 @@ transaction_request_cb(pjsip_rx_data *rdata)
         call->updateSDPFromSTUN();
 
     call->getSDP().receiveOffer(r_sdp,
-        account->getActiveAccountCodecInfoList(MEDIA_AUDIO),
-        account->getActiveAccountCodecInfoList(account->isVideoEnabled() ? MEDIA_VIDEO : MEDIA_NONE),
-        account->getSrtpKeyExchange());
+                                account->getActiveAccountCodecInfoList(MEDIA_AUDIO),
+                                account->getActiveAccountCodecInfoList(account->isVideoEnabled() ? MEDIA_VIDEO : MEDIA_NONE),
+                                account->getSrtpKeyExchange());
     call->setRemoteSdp(r_sdp);
 
     pjsip_dialog *dialog = nullptr;
@@ -420,8 +425,12 @@ transaction_request_cb(pjsip_rx_data *rdata)
     call->setState(Call::ConnectionState::RINGING);
 
     Manager::instance().incomingCall(*call, account_id);
+    replace_DLG(replaced_dlg,tdata);
+    return PJ_FALSE;
+}
 
-    if (replaced_dlg) {
+static void replace_DLG( pjsip_dialog *replaced_dlg, pjsip_tx_data * tdata){
+    if(replaced_dlg){
         // Get the INVITE session associated with the replaced dialog.
         auto replaced_inv = pjsip_dlg_get_inv_session(replaced_dlg);
 
@@ -434,9 +443,6 @@ transaction_request_cb(pjsip_rx_data *rdata)
         if (auto replacedCall = getCallFromInvite(replaced_inv))
             replacedCall->hangup(PJSIP_SC_OK);
     }
-
-
-    return PJ_FALSE;
 }
 
 static void
@@ -543,9 +549,9 @@ SIPVoIPLink::SIPVoIPLink() : pool_(nullptr, pj_pool_release)
         outgoing_request_forked_cb,
         transaction_state_changed_cb,
         sdp_request_offer_cb,
-#if PJ_VERSION_NUM > (2 << 24 | 1 << 16)
+    #if PJ_VERSION_NUM > (2 << 24 | 1 << 16)
         nullptr /* on_rx_reinvite */,
-#endif
+    #endif
         sdp_create_offer_cb,
         sdp_media_update_cb,
         nullptr /* on_send_ack */,
@@ -619,8 +625,8 @@ SIPVoIPLink::~SIPVoIPLink()
 
 std::shared_ptr<SIPAccountBase>
 SIPVoIPLink::guessAccount(const std::string& userName,
-                           const std::string& server,
-                           const std::string& fromUri) const
+                          const std::string& server,
+                          const std::string& fromUri) const
 {
     RING_DBG("username = %s, server = %s, from = %s", userName.c_str(), server.c_str(), fromUri.c_str());
     // Try to find the account id from username and server name by full match
@@ -701,20 +707,20 @@ void SIPVoIPLink::registerKeepAliveTimer(pj_timer_entry &timer, pj_time_val &del
         RING_WARN("Timer already scheduled");
 
     switch (pjsip_endpt_schedule_timer(endpt_, &timer, &delay)) {
-        case PJ_SUCCESS:
-            break;
+    case PJ_SUCCESS:
+        break;
 
-        default:
-            RING_ERR("Could not schedule new timer in pjsip endpoint");
+    default:
+        RING_ERR("Could not schedule new timer in pjsip endpoint");
 
-            /* fallthrough */
-        case PJ_EINVAL:
-            RING_ERR("Invalid timer or delay entry");
-            break;
+        /* fallthrough */
+    case PJ_EINVAL:
+        RING_ERR("Invalid timer or delay entry");
+        break;
 
-        case PJ_EINVALIDOP:
-            RING_ERR("Invalid timer entry, maybe already scheduled");
-            break;
+    case PJ_EINVALIDOP:
+        RING_ERR("Invalid timer entry, maybe already scheduled");
+        break;
     }
 }
 
@@ -763,10 +769,10 @@ SIPVoIPLink::requestKeyframe(const std::string &callID)
         return;
 
     const char * const BODY =
-        "<?xml version=\"1.0\" encoding=\"utf-8\" ?>"
-        "<media_control><vc_primitive><to_encoder>"
-        "<picture_fast_update/>"
-        "</to_encoder></vc_primitive></media_control>";
+            "<?xml version=\"1.0\" encoding=\"utf-8\" ?>"
+            "<media_control><vc_primitive><to_encoder>"
+            "<picture_fast_update/>"
+            "</to_encoder></vc_primitive></media_control>";
 
     RING_DBG("Sending video keyframe request via SIP INFO");
     call->sendSIPInfo(BODY, "media_control+xml");
@@ -817,41 +823,41 @@ invite_session_state_changed_cb(pjsip_inv_session *inv, pjsip_event *ev)
     }
 
     switch (inv->state) {
-        case PJSIP_INV_STATE_EARLY:
-            if (status_code == PJSIP_SC_RINGING)
-                call->onPeerRinging();
+    case PJSIP_INV_STATE_EARLY:
+        if (status_code == PJSIP_SC_RINGING)
+            call->onPeerRinging();
+        break;
+
+    case PJSIP_INV_STATE_CONFIRMED:
+        // After we sent or received a ACK - The connection is established
+        call->onAnswered();
+        break;
+
+    case PJSIP_INV_STATE_DISCONNECTED:
+        switch (inv->cause) {
+        // When the peer manually refuse the call
+        case PJSIP_SC_DECLINE:
+        case PJSIP_SC_BUSY_EVERYWHERE:
+        case PJSIP_SC_BUSY_HERE:
+            if (inv->role != PJSIP_ROLE_UAC)
+                break;
+            // close call
+
+            // The call terminates normally - BYE / CANCEL
+        case PJSIP_SC_OK:
+        case PJSIP_SC_REQUEST_TERMINATED:
+            call->onClosed();
             break;
 
-        case PJSIP_INV_STATE_CONFIRMED:
-            // After we sent or received a ACK - The connection is established
-            call->onAnswered();
-            break;
-
-        case PJSIP_INV_STATE_DISCONNECTED:
-            switch (inv->cause) {
-                // When the peer manually refuse the call
-                case PJSIP_SC_DECLINE:
-                case PJSIP_SC_BUSY_EVERYWHERE:
-                case PJSIP_SC_BUSY_HERE:
-                    if (inv->role != PJSIP_ROLE_UAC)
-                        break;
-                    // close call
-
-                // The call terminates normally - BYE / CANCEL
-                case PJSIP_SC_OK:
-                case PJSIP_SC_REQUEST_TERMINATED:
-                    call->onClosed();
-                    break;
-
-                // Error/unhandled conditions
-                default:
-                    call->onFailure(inv->cause);
-                    break;
-            }
-            break;
-
+            // Error/unhandled conditions
         default:
+            call->onFailure(inv->cause);
             break;
+        }
+        break;
+
+    default:
+        break;
     }
 }
 
@@ -887,10 +893,10 @@ sdp_create_offer_cb(pjsip_inv_session *inv, pjmedia_sdp_session **p_offer)
     if (account.getUPnPActive()) {
         /* use UPnP addr, or published addr if its set */
         address = account.getPublishedSameasLocal() ?
-            account.getUPnPIpAddress() : account.getPublishedIpAddress();
+                    account.getUPnPIpAddress() : account.getPublishedIpAddress();
     } else {
         address = account.getPublishedSameasLocal() ?
-            ifaceAddr : account.getPublishedIpAddress();
+                    ifaceAddr : account.getPublishedIpAddress();
     }
 
     /* fallback on local address */
@@ -901,10 +907,10 @@ sdp_create_offer_cb(pjsip_inv_session *inv, pjmedia_sdp_session **p_offer)
     auto& localSDP = call->getSDP();
     localSDP.setPublishedIP(address);
     const bool created = localSDP.createOffer(
-        account.getActiveAccountCodecInfoList(MEDIA_AUDIO),
-        account.getActiveAccountCodecInfoList(account.isVideoEnabled() ? MEDIA_VIDEO : MEDIA_NONE),
-        account.getSrtpKeyExchange()
-    );
+                account.getActiveAccountCodecInfoList(MEDIA_AUDIO),
+                account.getActiveAccountCodecInfoList(account.isVideoEnabled() ? MEDIA_VIDEO : MEDIA_NONE),
+                account.getSrtpKeyExchange()
+                );
 
     if (created)
         *p_offer = localSDP.getLocalSdpSession();
@@ -974,8 +980,8 @@ sdp_media_update_cb(pjsip_inv_session *inv, pj_status_t status)
 
     if (status != PJ_SUCCESS) {
         const int reason = inv->state != PJSIP_INV_STATE_NULL and
-                           inv->state != PJSIP_INV_STATE_CONFIRMED ?
-                           PJSIP_SC_UNSUPPORTED_MEDIA_TYPE : 0;
+                inv->state != PJSIP_INV_STATE_CONFIRMED ?
+                    PJSIP_SC_UNSUPPORTED_MEDIA_TYPE : 0;
 
         RING_WARN("[call:%s] SDP offer failed, reason %d", call->getCallId().c_str(), reason);
         call->hangup(reason);
@@ -1008,7 +1014,7 @@ handleMediaControl(SIPCall& call, pjsip_msg_body* body)
     const pj_str_t STR_MEDIA_CONTROL_XML = CONST_PJ_STR("media_control+xml");
 
     if (body->len and pj_stricmp(&body->content_type.type, &STR_APPLICATION) == 0 and
-        pj_stricmp(&body->content_type.subtype, &STR_MEDIA_CONTROL_XML) == 0) {
+            pj_stricmp(&body->content_type.subtype, &STR_MEDIA_CONTROL_XML) == 0) {
         pj_str_t control_st;
 
         /* Apply and answer the INFO request */
@@ -1061,7 +1067,7 @@ onRequestRefer(pjsip_inv_session* inv, pjsip_rx_data* rdata, pjsip_msg* msg, SIP
     if (auto refer_to = static_cast<pjsip_generic_string_hdr*>(pjsip_msg_find_hdr_by_name(msg, &str_refer_to, nullptr))) {
         // RFC 3515, 2.4.2: reply bad request if no or too many refer-to header.
         if (static_cast<void*>(refer_to->next) == static_cast<void*>(&msg->hdr) or
-            !pjsip_msg_find_hdr_by_name(msg, &str_refer_to, refer_to->next)) {
+                !pjsip_msg_find_hdr_by_name(msg, &str_refer_to, refer_to->next)) {
 
             replyToRequest(inv, rdata, PJSIP_SC_ACCEPTED);
             transferCall(call, std::string(refer_to->hvalue.ptr, refer_to->hvalue.slen));
@@ -1108,8 +1114,8 @@ transaction_state_changed_cb(pjsip_inv_session* inv, pjsip_transaction* tsx, pjs
 
     // We process here only incoming request message
     if (tsx->role != PJSIP_ROLE_UAS
-        or tsx->state != PJSIP_TSX_STATE_TRYING
-        or event->body.tsx_state.type != PJSIP_EVENT_RX_MSG) {
+            or tsx->state != PJSIP_TSX_STATE_TRYING
+            or event->body.tsx_state.type != PJSIP_EVENT_RX_MSG) {
         return;
     }
 
@@ -1159,26 +1165,26 @@ void SIPVoIPLink::createSDPOffer(pjsip_inv_session *inv, pjmedia_sdp_session **p
 
 // Thread-safe DNS resolver callback mapping
 class SafeResolveCallbackMap {
-    public:
-        using ResolveCallback = std::function<void(pj_status_t, const pjsip_server_addresses*)>;
+public:
+    using ResolveCallback = std::function<void(pj_status_t, const pjsip_server_addresses*)>;
 
-        void registerCallback(uintptr_t key, ResolveCallback&& cb) {
-            std::lock_guard<std::mutex> lk(mutex_);
-            cbMap_.emplace(key, std::move(cb));
+    void registerCallback(uintptr_t key, ResolveCallback&& cb) {
+        std::lock_guard<std::mutex> lk(mutex_);
+        cbMap_.emplace(key, std::move(cb));
+    }
+
+    void process(uintptr_t key, pj_status_t status, const pjsip_server_addresses* addr) {
+        std::lock_guard<std::mutex> lk(mutex_);
+        auto it = cbMap_.find(key);
+        if (it != cbMap_.end()) {
+            it->second(status, addr);
+            cbMap_.erase(it);
         }
+    }
 
-        void process(uintptr_t key, pj_status_t status, const pjsip_server_addresses* addr) {
-            std::lock_guard<std::mutex> lk(mutex_);
-            auto it = cbMap_.find(key);
-            if (it != cbMap_.end()) {
-                it->second(status, addr);
-                cbMap_.erase(it);
-            }
-        }
-
-    private:
-        std::mutex mutex_;
-        std::map<uintptr_t, ResolveCallback> cbMap_;
+private:
+    std::mutex mutex_;
+    std::map<uintptr_t, ResolveCallback> cbMap_;
 };
 
 static SafeResolveCallbackMap&
@@ -1225,31 +1231,31 @@ SIPVoIPLink::resolveSrvName(const std::string &name, pjsip_transport_type_e type
     pjsip_host_info host_info {
         /*.flag = */0,
         /*.type = */type,
-        /*.addr = */{{(char*)name.c_str(), name_size}, port},
+                /*.addr = */{{(char*)name.c_str(), name_size}, port},
     };
 
     const auto token = std::hash<std::string>()(name + to_string(type));
     getResolveCallbackMap().registerCallback(token,
-        [=](pj_status_t s, const pjsip_server_addresses* r) {
-            try {
-                if (s != PJ_SUCCESS || !r) {
-                    RING_WARN("Can't resolve \"%s\" using pjsip_endpt_resolve, trying getaddrinfo.", name.c_str());
-                    std::thread([=](){
-                        auto ips = ip_utils::getAddrList(name.c_str());
-                        runOnMainThread(std::bind(cb, ips.empty() ? std::vector<IpAddr>{} : std::move(ips)));
-                    }).detach();
-                } else {
-                    std::vector<IpAddr> ips;
-                    ips.reserve(r->count);
-                    for (unsigned i=0; i < r->count; i++)
-                        ips.push_back(r->entry[i].addr);
-                    cb(ips);
-                }
-            } catch (const std::exception& e) {
-                RING_ERR("Error resolving address: %s", e.what());
-                cb({});
+                                             [=](pj_status_t s, const pjsip_server_addresses* r) {
+        try {
+            if (s != PJ_SUCCESS || !r) {
+                RING_WARN("Can't resolve \"%s\" using pjsip_endpt_resolve, trying getaddrinfo.", name.c_str());
+                std::thread([=](){
+                    auto ips = ip_utils::getAddrList(name.c_str());
+                    runOnMainThread(std::bind(cb, ips.empty() ? std::vector<IpAddr>{} : std::move(ips)));
+                }).detach();
+            } else {
+                std::vector<IpAddr> ips;
+                ips.reserve(r->count);
+                for (unsigned i=0; i < r->count; i++)
+                    ips.push_back(r->entry[i].addr);
+                cb(ips);
             }
-        });
+        } catch (const std::exception& e) {
+            RING_ERR("Error resolving address: %s", e.what());
+            cb({});
+        }
+    });
 
     pjsip_endpt_resolve(endpt_, pool_.get(), &host_info, (void*)token, resolver_callback);
 }
@@ -1329,8 +1335,8 @@ SIPVoIPLink::findLocalAddressFromSTUN(pjsip_transport* transport,
 
     // Update address and port with active transport
     RETURN_FALSE_IF_NULL(transport,
-                   "Transport is NULL in findLocalAddress, using local address %s:%u",
-                   addr.c_str(), port);
+                         "Transport is NULL in findLocalAddress, using local address %s:%u",
+                         addr.c_str(), port);
 
     RING_DBG("STUN mapping of '%s:%u'", addr.c_str(), port);
 
@@ -1344,27 +1350,27 @@ SIPVoIPLink::findLocalAddressFromSTUN(pjsip_transport* transport,
                                                            &mapped_addr);
 
     switch (stunStatus) {
-        case PJLIB_UTIL_ESTUNNOTRESPOND:
-           RING_ERR("No response from STUN server %.*s",
-                    (int)stunServerName->slen, stunServerName->ptr);
-           return false;
+    case PJLIB_UTIL_ESTUNNOTRESPOND:
+        RING_ERR("No response from STUN server %.*s",
+                 (int)stunServerName->slen, stunServerName->ptr);
+        return false;
 
-        case PJLIB_UTIL_ESTUNSYMMETRIC:
-           RING_ERR("Different mapped addresses are returned by servers.");
-           return false;
+    case PJLIB_UTIL_ESTUNSYMMETRIC:
+        RING_ERR("Different mapped addresses are returned by servers.");
+        return false;
 
-        case PJ_SUCCESS:
-            port = pj_sockaddr_in_get_port(&mapped_addr);
-            addr = IpAddr((const pj_sockaddr&)mapped_addr).toString();
-            RING_DBG("STUN server %.*s replied '%s:%u'",
-                     (int)stunServerName->slen, stunServerName->ptr,
-                     addr.c_str(), port);
-            return true;
+    case PJ_SUCCESS:
+        port = pj_sockaddr_in_get_port(&mapped_addr);
+        addr = IpAddr((const pj_sockaddr&)mapped_addr).toString();
+        RING_DBG("STUN server %.*s replied '%s:%u'",
+                 (int)stunServerName->slen, stunServerName->ptr,
+                 addr.c_str(), port);
+        return true;
 
-        default: // use given address, silent any not handled error
-            RING_WARN("Error from STUN server %.*s, using source address",
-                      (int)stunServerName->slen, stunServerName->ptr);
-            return false;
+    default: // use given address, silent any not handled error
+        RING_WARN("Error from STUN server %.*s, using source address",
+                  (int)stunServerName->slen, stunServerName->ptr);
+        return false;
     }
 }
 #undef RETURN_IF_NULL
