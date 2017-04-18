@@ -1767,7 +1767,7 @@ check_peer_certificate(dht::InfoHash from, unsigned status, const gnutls_datum_t
 tls::TlsParams RingAccount::provide_tlsParams(dht::InfoHash remote_h, std::weak_ptr<SIPCall> call, bool incoming){
     std::weak_ptr<RingAccount> w = std::static_pointer_cast<RingAccount>(shared_from_this());
     std::weak_ptr<SIPCall> wcall = call;
-return tls::TlsParams tlsParams {
+    tls::TlsParams tlsParams {
     /*.ca_list = */"",
     /*.cert = */identity_.second,
     /*.cert_key = */identity_.first,
@@ -1804,6 +1804,7 @@ return tls::TlsParams tlsParams {
         }
     }
 };
+return tlsParams;
 }
 
 
@@ -1838,7 +1839,7 @@ RingAccount::handlePendingCall(PendingCall& pc, bool incoming)
         throw std::runtime_error("No identity configured for this account.");
 
 
-    tls::TlsParams tlsParams = provide_tlsParams(call,remote_h,incoming);
+    tls::TlsParams tlsParams = provide_tlsParams(remote_h,call,incoming);
     call->setTransport(link_->sipTransportBroker->getTlsIceTransport(pc.ice_sp, ICE_COMP_SIP_TRANSPORT,
                                                             tlsParams));
 
